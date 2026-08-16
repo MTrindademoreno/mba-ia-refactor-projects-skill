@@ -60,11 +60,54 @@ A correção não foi adicionar um segundo exemplo em outra linguagem, porque is
 A prova concreta veio de rodar a skill nos 3 projetos e comparar os relatórios. code smells project e task manager api são Python/Flask em estágios de organização diferentes, ecommerce api legacy é Node/Express. Foi esse terceiro que validou de fato: o relatório recomendou process.env, hashing com crypto.scryptSync, transação SQLite com BEGIN/COMMIT, sem nenhum resquício de Flask ou Python. Isso comprova a Fase 1 (detecção) e a Fase 2 (auditoria) nas duas stacks. A Fase 3 (execução do refactor) ainda não rodou em nenhum projeto, então esse pedaço continua sendo design validado, não comportamento comprovado.
 
 Desafios encontrados
-Viés de linguagem escondido atrás de um texto que dizia "isso é só ilustrativo". Só apareceu numa revisão deliberada, não no primeiro rascunho.
 
-Duplicação acidental do pacote da skill: numa primeira iteração ela ficou copiada em .agents/ dentro dos 3 projetos, fora da convenção do Claude Code. Precisei consolidar numa fonte única antes de discutir qualquer coisa sobre agnosticismo, senão todo ajuste teria que ser replicado 3 vezes à mão.
+Viés de linguagem escondido atrás de um texto que dizia "isso é só ilustrativo". Só apareceu numa revisão deliberada, não no primeiro rascunho.
 
 Confiar no relatório sem comparar achado a achado com a análise manual foi uma tentação real. Só ao montar a comparação (5/5, 5/5, 6/6) ficou claro que a cobertura era genuína.
 
-Separar "está bem desenhado" de "está comprovado". Depois de neutralizar o pseudocódigo, quase declarei a skill agnóstica de cara. Mas isso só vale pra Fase 3, que ainda não rodou em nenhum projeto. Fases 1 e 2 têm prova empírica. Fase 3 continua sendo uma hipótese bem fundamentada, não um fato validado.
+# Resultados
+
+Relatório completo: [`reports/audit-project-1-code-smells-project.md`](../reports/audit-project-1-code-smells-project.md).
+
+Resumo por severidade: **CRITICAL: 4 | HIGH: 4 | MEDIUM: 3 | LOW: 3** (14 findings no total).
+
+Os 5 problemas da análise manual foram todos confirmados pela auditoria (5/5). Além deles, a Fase 2 encontrou 9 achados adicionais, incluindo os 4 CRITICAL que não constavam na revisão manual:
+
+- SQL injection generalizada em `models.py`, em praticamente toda função que monta query por concatenação de string.
+- `/admin/query`: endpoint sem autenticação que executa SQL arbitrário vindo do corpo da requisição.
+- `/admin/reset-db`: endpoint destrutivo (apaga todas as tabelas) sem autenticação.
+- `SECRET_KEY` hardcoded e devolvido no corpo da resposta de `/health`, junto com o flag de debug.
+
+A Fase 3 já rodou neste projeto (relatório completo em [`reports/code-smells-project-phase3-refactoring.md`](reports/code-smells-project-phase3-refactoring.md)): `models.py` foi separado em `models/produtos.py`, `models/usuarios.py` e `models/pedidos.py`; `SECRET_KEY`/`DEBUG`/`DATABASE_PATH` passaram a vir de variável de ambiente via `config.py`; senhas agora são hasheadas com `werkzeug.security`; `/admin/reset-db` e `/admin/query` foram removidos; e todas as queries passaram a usar parâmetros vinculados.
+
+**Validação manual pós-refatoração**
+
+Suba o servidor num terminal:
+
+```powershell
+cd code-smells-project
+pip install -r requirements.txt
+python app.py
+```
+
+Em outro terminal (PowerShell), rode:
+
+```powershell
+Invoke-RestMethod http://localhost:5000/health
+Invoke-RestMethod http://localhost:5000/produtos
+Invoke-RestMethod http://localhost:5000/usuarios
+
+Invoke-RestMethod -Uri http://localhost:5000/login -Method Post -ContentType "application/json" -Body (@{ email = "admin@loja.com"; senha = "admin123" } | ConvertTo-Json)
+```
+
+Resultado esperado:
+
+```
+GET /health    -> database: connected | db_path: loja.db | status: ok | versao: 1.0.0
+GET /produtos  -> 4 produtos retornados, sucesso: True
+GET /usuarios  -> 3 usuários retornados (id, nome, email, tipo, criado_em), sem o campo "senha", sucesso: True
+POST /login    -> {email: admin@loja.com, senha: admin123} -> mensagem: "Login OK", sucesso: True
+```
+
+Confirma na prática dois dos achados CRITICAL corrigidos: a senha não é mais exposta pela API (`GET /usuarios`) e o login funciona corretamente contra a senha já hasheada no seed, sem regressão de comportamento.
 

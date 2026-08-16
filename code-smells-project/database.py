@@ -1,15 +1,21 @@
 import sqlite3
-import os
 
-db_connection = None
-db_path = "loja.db"
+from werkzeug.security import generate_password_hash
 
-def get_db():
-    global db_connection
-    if db_connection is None:
-        db_connection = sqlite3.connect(db_path, check_same_thread=False)
-        db_connection.row_factory = sqlite3.Row
-        cursor = db_connection.cursor()
+
+class Database:
+    def __init__(self, database_path: str) -> None:
+        self.database_path = database_path
+
+    def connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.database_path, check_same_thread=False)
+        connection.row_factory = sqlite3.Row
+        self._criar_tabelas(connection)
+        self._seed_dados_iniciais(connection)
+        return connection
+
+    def _criar_tabelas(self, connection: sqlite3.Connection) -> None:
+        cursor = connection.cursor()
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS produtos (
@@ -51,36 +57,38 @@ def get_db():
                 preco_unitario REAL
             )
         """)
-        db_connection.commit()
+        connection.commit()
 
+    def _seed_dados_iniciais(self, connection: sqlite3.Connection) -> None:
+        cursor = connection.cursor()
         cursor.execute("SELECT COUNT(*) FROM produtos")
-        if cursor.fetchone()[0] == 0:
-            produtos = [
-                ("Notebook Gamer", "Notebook potente para jogos", 5999.99, 10, "informatica"),
-                ("Mouse Wireless", "Mouse sem fio ergonômico", 89.90, 50, "informatica"),
-                ("Teclado Mecânico", "Teclado mecânico RGB", 299.90, 30, "informatica"),
-                ("Monitor 27''", "Monitor 27 polegadas 144hz", 1899.90, 15, "informatica"),
-                ("Headset Gamer", "Headset com microfone", 199.90, 25, "informatica"),
-                ("Cadeira Gamer", "Cadeira ergonômica", 1299.90, 8, "moveis"),
-                ("Webcam HD", "Webcam 1080p", 249.90, 20, "informatica"),
-                ("Hub USB", "Hub USB 3.0 7 portas", 79.90, 40, "informatica"),
-                ("SSD 1TB", "SSD NVMe 1TB", 449.90, 35, "informatica"),
-                ("Camiseta Dev", "Camiseta estampa código", 59.90, 100, "vestuario"),
-            ]
-            cursor.executemany(
-                "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) VALUES (?, ?, ?, ?, ?)",
-                produtos
-            )
+        if cursor.fetchone()[0] != 0:
+            return
 
-            usuarios = [
-                ("Admin", "admin@loja.com", "admin123", "admin"),
-                ("João Silva", "joao@email.com", "123456", "cliente"),
-                ("Maria Santos", "maria@email.com", "senha123", "cliente"),
-            ]
-            cursor.executemany(
-                "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
-                usuarios
-            )
-            db_connection.commit()
+        produtos = [
+            ("Notebook Gamer", "Notebook potente para jogos", 5999.99, 10, "informatica"),
+            ("Mouse Wireless", "Mouse sem fio ergonômico", 89.90, 50, "informatica"),
+            ("Teclado Mecânico", "Teclado mecânico RGB", 299.90, 30, "informatica"),
+            ("Monitor 27''", "Monitor 27 polegadas 144hz", 1899.90, 15, "informatica"),
+            ("Headset Gamer", "Headset com microfone", 199.90, 25, "informatica"),
+            ("Cadeira Gamer", "Cadeira ergonômica", 1299.90, 8, "moveis"),
+            ("Webcam HD", "Webcam 1080p", 249.90, 20, "informatica"),
+            ("Hub USB", "Hub USB 3.0 7 portas", 79.90, 40, "informatica"),
+            ("SSD 1TB", "SSD NVMe 1TB", 449.90, 35, "informatica"),
+            ("Camiseta Dev", "Camiseta estampa código", 59.90, 100, "vestuario"),
+        ]
+        cursor.executemany(
+            "INSERT INTO produtos (nome, descricao, preco, estoque, categoria) VALUES (?, ?, ?, ?, ?)",
+            produtos,
+        )
 
-    return db_connection
+        usuarios = [
+            ("Admin", "admin@loja.com", generate_password_hash("admin123"), "admin"),
+            ("João Silva", "joao@email.com", generate_password_hash("123456"), "cliente"),
+            ("Maria Santos", "maria@email.com", generate_password_hash("senha123"), "cliente"),
+        ]
+        cursor.executemany(
+            "INSERT INTO usuarios (nome, email, senha, tipo) VALUES (?, ?, ?, ?)",
+            usuarios,
+        )
+        connection.commit()

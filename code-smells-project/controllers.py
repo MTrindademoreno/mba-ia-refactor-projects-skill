@@ -1,38 +1,57 @@
-from flask import request, jsonify
-import models
-from database import get_db
+import logging
+
+from flask import jsonify, request
+
+import config
+from models import pedidos, produtos, usuarios
+from utils.constants import STATUS_PEDIDO_VALIDOS
+from utils.validation import validar_produto
+
+logger = logging.getLogger(__name__)
+
+
+def index():
+    return jsonify({
+        "mensagem": "Bem-vindo à API da Loja",
+        "versao": "1.0.0",
+        "endpoints": {
+            "produtos": "/produtos",
+            "usuarios": "/usuarios",
+            "pedidos": "/pedidos",
+            "login": "/login",
+            "relatorios": "/relatorios/vendas",
+            "health": "/health"
+        }
+    })
+
 
 def listar_produtos():
     try:
-        produtos = models.get_todos_produtos()
-        print("Listando " + str(len(produtos)) + " produtos")
-        return jsonify({"dados": produtos, "sucesso": True}), 200
-    except Exception as e:
-        print("ERRO: " + str(e))
-        return jsonify({"erro": str(e)}), 500
+        dados = produtos.get_todos()
+        return jsonify({"dados": dados, "sucesso": True}), 200
+    except Exception:
+        logger.exception("Erro ao listar produtos")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def buscar_produto(id):
     try:
-        produto = models.get_produto_por_id(id)
+        produto = produtos.get_por_id(id)
         if produto:
             return jsonify({"dados": produto, "sucesso": True}), 200
-        else:
-            return jsonify({"erro": "Produto não encontrado", "sucesso": False}), 404
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Produto não encontrado", "sucesso": False}), 404
+    except Exception:
+        logger.exception("Erro ao buscar produto %s", id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def criar_produto():
     try:
         dados = request.get_json()
 
-        if not dados:
-            return jsonify({"erro": "Dados inválidos"}), 400
-        if "nome" not in dados:
-            return jsonify({"erro": "Nome é obrigatório"}), 400
-        if "preco" not in dados:
-            return jsonify({"erro": "Preço é obrigatório"}), 400
-        if "estoque" not in dados:
-            return jsonify({"erro": "Estoque é obrigatório"}), 400
+        erro = validar_produto(dados)
+        if erro:
+            return jsonify({"erro": erro}), 400
 
         nome = dados["nome"]
         descricao = dados.get("descricao", "")
@@ -40,43 +59,26 @@ def criar_produto():
         estoque = dados["estoque"]
         categoria = dados.get("categoria", "geral")
 
-        if preco < 0:
-            return jsonify({"erro": "Preço não pode ser negativo"}), 400
-        if estoque < 0:
-            return jsonify({"erro": "Estoque não pode ser negativo"}), 400
-        if len(nome) < 2:
-            return jsonify({"erro": "Nome muito curto"}), 400
-        if len(nome) > 200:
-            return jsonify({"erro": "Nome muito longo"}), 400
-
-        categorias_validas = ["informatica", "moveis", "vestuario", "geral", "eletronicos", "livros"]
-        if categoria not in categorias_validas:
-            return jsonify({"erro": "Categoria inválida. Válidas: " + str(categorias_validas)}), 400
-
-        id = models.criar_produto(nome, descricao, preco, estoque, categoria)
-        print("Produto criado com ID: " + str(id))
+        id = produtos.criar(nome, descricao, preco, estoque, categoria)
+        logger.info("Produto criado com ID: %s", id)
         return jsonify({"dados": {"id": id}, "sucesso": True, "mensagem": "Produto criado"}), 201
 
-    except Exception as e:
-        print("ERRO ao criar produto: " + str(e))
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao criar produto")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def atualizar_produto(id):
     try:
         dados = request.get_json()
 
-        produto_existente = models.get_produto_por_id(id)
+        produto_existente = produtos.get_por_id(id)
         if not produto_existente:
             return jsonify({"erro": "Produto não encontrado"}), 404
 
-        if not dados:
-            return jsonify({"erro": "Dados inválidos"}), 400
-        if "nome" not in dados:
-            return jsonify({"erro": "Nome é obrigatório"}), 400
-        if "preco" not in dados:
-            return jsonify({"erro": "Preço é obrigatório"}), 400
-        if "estoque" not in dados:
-            return jsonify({"erro": "Estoque é obrigatório"}), 400
+        erro = validar_produto(dados)
+        if erro:
+            return jsonify({"erro": erro}), 400
 
         nome = dados["nome"]
         descricao = dados.get("descricao", "")
@@ -84,29 +86,27 @@ def atualizar_produto(id):
         estoque = dados["estoque"]
         categoria = dados.get("categoria", "geral")
 
-        if preco < 0:
-            return jsonify({"erro": "Preço não pode ser negativo"}), 400
-        if estoque < 0:
-            return jsonify({"erro": "Estoque não pode ser negativo"}), 400
-
-        models.atualizar_produto(id, nome, descricao, preco, estoque, categoria)
+        produtos.atualizar(id, nome, descricao, preco, estoque, categoria)
         return jsonify({"sucesso": True, "mensagem": "Produto atualizado"}), 200
 
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao atualizar produto %s", id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def deletar_produto(id):
     try:
-
-        produto = models.get_produto_por_id(id)
+        produto = produtos.get_por_id(id)
         if not produto:
             return jsonify({"erro": "Produto não encontrado"}), 404
 
-        models.deletar_produto(id)
-        print("Produto " + str(id) + " deletado")
+        produtos.deletar(id)
+        logger.info("Produto %s deletado", id)
         return jsonify({"sucesso": True, "mensagem": "Produto deletado"}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao deletar produto %s", id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def buscar_produtos():
     try:
@@ -120,28 +120,32 @@ def buscar_produtos():
         if preco_max:
             preco_max = float(preco_max)
 
-        resultados = models.buscar_produtos(termo, categoria, preco_min, preco_max)
+        resultados = produtos.buscar(termo, categoria, preco_min, preco_max)
         return jsonify({"dados": resultados, "total": len(resultados), "sucesso": True}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao buscar produtos")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def listar_usuarios():
     try:
-        usuarios = models.get_todos_usuarios()
+        dados = usuarios.get_todos()
+        return jsonify({"dados": dados, "sucesso": True}), 200
+    except Exception:
+        logger.exception("Erro ao listar usuarios")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
 
-        return jsonify({"dados": usuarios, "sucesso": True}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
 
 def buscar_usuario(id):
     try:
-        usuario = models.get_usuario_por_id(id)
+        usuario = usuarios.get_por_id(id)
         if usuario:
             return jsonify({"dados": usuario, "sucesso": True}), 200
-        else:
-            return jsonify({"erro": "Usuário não encontrado"}), 404
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        return jsonify({"erro": "Usuário não encontrado"}), 404
+    except Exception:
+        logger.exception("Erro ao buscar usuario %s", id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def criar_usuario():
     try:
@@ -157,12 +161,14 @@ def criar_usuario():
         if not nome or not email or not senha:
             return jsonify({"erro": "Nome, email e senha são obrigatórios"}), 400
 
-        id = models.criar_usuario(nome, email, senha)
-        print("Usuário criado: " + email)
+        id = usuarios.criar(nome, email, senha)
+        logger.info("Usuário criado: %s", email)
         return jsonify({"dados": {"id": id}, "sucesso": True}), 201
 
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao criar usuario")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def login():
     try:
@@ -173,17 +179,18 @@ def login():
         if not email or not senha:
             return jsonify({"erro": "Email e senha são obrigatórios"}), 400
 
-        usuario = models.login_usuario(email, senha)
+        usuario = usuarios.login(email, senha)
         if usuario:
-
-            print("Login bem-sucedido: " + email)
+            logger.info("Login bem-sucedido: %s", email)
             return jsonify({"dados": usuario, "sucesso": True, "mensagem": "Login OK"}), 200
         else:
-            print("Login falhou: " + email)
+            logger.info("Login falhou: %s", email)
             return jsonify({"erro": "Email ou senha inválidos", "sucesso": False}), 401
 
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro no login")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def criar_pedido():
     try:
@@ -200,14 +207,12 @@ def criar_pedido():
         if not itens or len(itens) == 0:
             return jsonify({"erro": "Pedido deve ter pelo menos 1 item"}), 400
 
-        resultado = models.criar_pedido(usuario_id, itens)
+        resultado = pedidos.criar(usuario_id, itens)
 
         if "erro" in resultado:
             return jsonify({"erro": resultado["erro"], "sucesso": False}), 400
 
-        print("ENVIANDO EMAIL: Pedido " + str(resultado["pedido_id"]) + " criado para usuario " + str(usuario_id))
-        print("ENVIANDO SMS: Seu pedido foi recebido!")
-        print("ENVIANDO PUSH: Novo pedido recebido pelo sistema")
+        logger.info("Pedido %s criado para usuario %s", resultado["pedido_id"], usuario_id)
 
         return jsonify({
             "dados": resultado,
@@ -215,78 +220,74 @@ def criar_pedido():
             "mensagem": "Pedido criado com sucesso"
         }), 201
 
-    except Exception as e:
-        print("ERRO CRITICO ao criar pedido: " + str(e))
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro critico ao criar pedido")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def listar_pedidos_usuario(usuario_id):
     try:
-        pedidos = models.get_pedidos_usuario(usuario_id)
-        return jsonify({"dados": pedidos, "sucesso": True}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+        dados = pedidos.get_por_usuario(usuario_id)
+        return jsonify({"dados": dados, "sucesso": True}), 200
+    except Exception:
+        logger.exception("Erro ao listar pedidos do usuario %s", usuario_id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def listar_todos_pedidos():
     try:
+        dados = pedidos.get_todos()
+        return jsonify({"dados": dados, "sucesso": True}), 200
+    except Exception:
+        logger.exception("Erro ao listar pedidos")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
 
-        pedidos = models.get_todos_pedidos()
-        return jsonify({"dados": pedidos, "sucesso": True}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
 
 def atualizar_status_pedido(pedido_id):
     try:
         dados = request.get_json()
         novo_status = dados.get("status", "")
 
-        if novo_status not in ["pendente", "aprovado", "enviado", "entregue", "cancelado"]:
+        if novo_status not in STATUS_PEDIDO_VALIDOS:
             return jsonify({"erro": "Status inválido"}), 400
 
-        models.atualizar_status_pedido(pedido_id, novo_status)
+        pedidos.atualizar_status(pedido_id, novo_status)
 
         if novo_status == "aprovado":
-            print("NOTIFICAÇÃO: Pedido " + str(pedido_id) + " foi aprovado! Preparar envio.")
+            logger.info("Pedido %s aprovado - preparar envio", pedido_id)
         if novo_status == "cancelado":
-            print("NOTIFICAÇÃO: Pedido " + str(pedido_id) + " cancelado. Devolver estoque.")
+            logger.info("Pedido %s cancelado - devolver estoque", pedido_id)
 
         return jsonify({"sucesso": True, "mensagem": "Status atualizado"}), 200
 
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao atualizar status do pedido %s", pedido_id)
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def relatorio_vendas():
     try:
-        relatorio = models.relatorio_vendas()
+        relatorio = pedidos.relatorio_vendas()
         return jsonify({"dados": relatorio, "sucesso": True}), 200
-    except Exception as e:
-        return jsonify({"erro": str(e)}), 500
+    except Exception:
+        logger.exception("Erro ao gerar relatorio de vendas")
+        return jsonify({"erro": "Erro interno ao processar a requisição"}), 500
+
 
 def health_check():
     try:
-        db = get_db()
-        cursor = db.cursor()
-        cursor.execute("SELECT 1")
-        cursor.execute("SELECT COUNT(*) FROM produtos")
-        produtos = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM usuarios")
-        usuarios = cursor.fetchone()[0]
-        cursor.execute("SELECT COUNT(*) FROM pedidos")
-        pedidos = cursor.fetchone()[0]
-
         return jsonify({
             "status": "ok",
             "database": "connected",
             "counts": {
-                "produtos": produtos,
-                "usuarios": usuarios,
-                "pedidos": pedidos
+                "produtos": produtos.contar(),
+                "usuarios": usuarios.contar(),
+                "pedidos": pedidos.contar_todos()
             },
-
             "versao": "1.0.0",
             "ambiente": "producao",
-            "db_path": "loja.db",
-            "debug": True,
-            "secret_key": "minha-chave-super-secreta-123"
+            "db_path": config.DATABASE_PATH
         }), 200
-    except Exception as e:
-        return jsonify({"status": "erro", "detalhes": str(e)}), 500
+    except Exception:
+        logger.exception("Erro no health check")
+        return jsonify({"status": "erro", "detalhes": "Erro interno ao verificar o sistema"}), 500
