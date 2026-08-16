@@ -119,6 +119,18 @@ Evidence: Operational and diagnostic messages are written with bare `print()` ca
 Impact: No log levels, no structured output, and no way to control verbosity or route logs to a collection system without editing source code.
 Recommendation: Replace `print()` calls with Python's `logging` module, configured once at the entry point.
 
+## Verificação adicional (CS-021 — APIs deprecated)
+
+Checagem retroativa executada após a adição do critério CS-021 ao catálogo da skill (não fazia parte da auditoria original acima).
+
+Escopo verificado: código então auditado (app.py, controllers.py, models.py, database.py monolíticos) e o código atual pós-Fase 3 (app.py, config.py, database.py, routes.py, controllers.py, models/produtos.py, models/usuarios.py, models/pedidos.py, utils/constants.py, utils/validation.py), contra as versões fixadas em requirements.txt: `flask==3.1.1`, `flask-cors==5.0.1` (Werkzeug é dependência transitiva do Flask; nenhuma versão própria é pinada).
+
+Evidence: As únicas APIs de terceiros usadas em todo o projeto são `flask.Flask`, `flask.jsonify`, `flask.request`, `Flask.add_url_rule`, `Flask.run`, `flask_cors.CORS`, `werkzeug.security.generate_password_hash`/`check_password_hash`, e a biblioteca padrão `sqlite3`/`logging`. Nenhuma delas consta como deprecated na documentação oficial do Flask 3.1.x, Werkzeug 3.x ou Flask-Cors 5.x, e nenhum `DeprecationWarning` é emitido ao iniciar a aplicação (`python app.py`) ou ao exercitar os endpoints.
+Impact: Nenhum. Verificação de rotina que não abre nova ação — registrada aqui apenas para fechar o item correspondente do checklist de validação.
+Recommendation: Nenhuma ação necessária no momento. Reexecutar esta checagem quando as versões em requirements.txt forem atualizadas.
+
+Nota de ambiente: o ambiente Python local instalado difere do manifest (`pip show` retorna Flask 3.0.0 / Werkzeug 3.1.8 / Flask-Cors 4.0.0, enquanto requirements.txt fixa Flask 3.1.1 / Flask-Cors 5.0.1). Isso não muda o resultado da checagem — nenhuma das APIs usadas é deprecated em nenhum dos dois conjuntos de versões — mas o ambiente local deveria ser sincronizado com `pip install -r requirements.txt` antes da próxima execução para evitar essa divergência.
+
 ## Approved-scope proposal
 
 1. Parameterize every SQL statement in models.py to eliminate SQL injection (CS-008-1), preserving existing function signatures and return shapes.

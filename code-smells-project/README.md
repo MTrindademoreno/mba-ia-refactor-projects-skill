@@ -69,14 +69,14 @@ Confiar no relatório sem comparar achado a achado com a análise manual foi uma
 
 Relatório completo: [`reports/audit-project-1-code-smells-project.md`](../reports/audit-project-1-code-smells-project.md).
 
-Resumo por severidade: **CRITICAL: 4 | HIGH: 4 | MEDIUM: 3 | LOW: 3** (14 findings no total).
+Resumo por severidade: **CRITICAL: 4 | HIGH: 4 | MEDIUM: 4 | LOW: 2** (14 findings no total).
 
 Os 5 problemas da análise manual foram todos confirmados pela auditoria (5/5). Além deles, a Fase 2 encontrou 9 achados adicionais, incluindo os 4 CRITICAL que não constavam na revisão manual:
 
 - SQL injection generalizada em `models.py`, em praticamente toda função que monta query por concatenação de string.
-- `/admin/query`: endpoint sem autenticação que executa SQL arbitrário vindo do corpo da requisição.
-- `/admin/reset-db`: endpoint destrutivo (apaga todas as tabelas) sem autenticação.
-- `SECRET_KEY` hardcoded e devolvido no corpo da resposta de `/health`, junto com o flag de debug.
+- Endpoint sem autenticação que executa SQL arbitrário vindo do corpo da requisição.
+- `SECRET_KEY` e modo debug hardcoded no código-fonte.
+- Senhas armazenadas e comparadas em texto puro no login e na criação de usuário.
 
 A Fase 3 já rodou neste projeto (relatório completo em [`reports/code-smells-project-phase3-refactoring.md`](reports/code-smells-project-phase3-refactoring.md)): `models.py` foi separado em `models/produtos.py`, `models/usuarios.py` e `models/pedidos.py`; `SECRET_KEY`/`DEBUG`/`DATABASE_PATH` passaram a vir de variável de ambiente via `config.py`; senhas agora são hasheadas com `werkzeug.security`; `/admin/reset-db` e `/admin/query` foram removidos; e todas as queries passaram a usar parâmetros vinculados.
 
@@ -110,4 +110,31 @@ POST /login    -> {email: admin@loja.com, senha: admin123} -> mensagem: "Login O
 ```
 
 Confirma na prática dois dos achados CRITICAL corrigidos: a senha não é mais exposta pela API (`GET /usuarios`) e o login funciona corretamente contra a senha já hasheada no seed, sem regressão de comportamento.
+
+## Checklist de Validação
+
+### Fase 1 — Análise
+- [x] Linguagem detectada corretamente
+- [x] Framework detectado corretamente
+- [x] Domínio da aplicação descrito corretamente
+- [x] Número de arquivos analisados condiz com a realidade
+
+### Fase 2 — Auditoria
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados
+- [x] Detecção de APIs deprecated incluída (se aplicável)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+### Fase 3 — Refatoração
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config (sem hardcoded)
+- [x] Models criados para abstrair dados
+- [x] Views/Routes separadas para visualização ou roteamento
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado
+- [x] Entry point claro
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente
 

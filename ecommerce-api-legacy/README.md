@@ -81,3 +81,30 @@ Os 5 problemas da análise manual foram todos confirmados pela auditoria (5/5), 
 O relatório também confirmou explicitamente a ausência de SQL injection (todas as queries já usam `?` com array de parâmetros) e de APIs deprecated nas versões de `express`/`sqlite3` em uso, em vez de simplesmente não mencionar o tema.
 
 Fase 3 (execução do refactor) ainda não rodou neste projeto, então não há comparação de estrutura antes/depois nem validação de boot/endpoints pós-refatoração até o momento.
+
+## Checklist de Validação
+
+### Fase 1 — Análise
+- [x] Linguagem detectada corretamente
+- [x] Framework detectado corretamente
+- [x] Domínio da aplicação descrito corretamente
+- [x] Número de arquivos analisados condiz com a realidade
+
+### Fase 2 — Auditoria
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados
+- [x] Detecção de APIs deprecated incluída (se aplicável)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+### Fase 3 — Refatoração
+- [ ] Estrutura de diretórios segue padrão MVC
+- [ ] Configuração extraída para módulo de config (sem hardcoded)
+- [ ] Models criados para abstrair dados
+- [ ] Views/Routes separadas para visualização ou roteamento
+- [ ] Controllers concentram o fluxo da aplicação
+- [ ] Error handling centralizado
+- [ ] Entry point claro
+- [ ] Aplicação inicia sem erros
+- [ ] Endpoints originais respondem corretamente

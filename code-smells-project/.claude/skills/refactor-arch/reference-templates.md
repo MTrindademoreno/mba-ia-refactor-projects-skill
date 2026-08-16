@@ -85,3 +85,36 @@ Target architecture: <stack-appropriate style>
 ```
 
 Show the project’s real paths and extensions. Do not prescribe a Python, Node, MVC, microservice, or layered directory tree unless it is compatible with the detected framework and approved plan.
+
+## Validation Checklist (maintained in the project's README.md)
+
+Every project's own `README.md` must contain this exact checklist, under a `## Checklist de Validação` heading. Create the section on the first phase that runs if it is not already present; on later phases, edit the existing section in place rather than appending a duplicate. Mark `[x]` only for an item you have concrete evidence for from the current run; leave `[ ]` for anything not yet reached, not run, or not verifiable, and add a short trailing note on that line explaining why (e.g. `- [ ] Fase 3 ainda não executada`). Never check an item by default or by inference.
+
+```markdown
+## Checklist de Validação
+
+### Fase 1 — Análise
+- [ ] Linguagem detectada corretamente
+- [ ] Framework detectado corretamente
+- [ ] Domínio da aplicação descrito corretamente
+- [ ] Número de arquivos analisados condiz com a realidade
+
+### Fase 2 — Auditoria
+- [ ] Relatório segue o template definido nos arquivos de referência
+- [ ] Cada finding tem arquivo e linhas exatos
+- [ ] Findings ordenados por severidade (CRITICAL → LOW)
+- [ ] Mínimo de 5 findings identificados
+- [ ] Detecção de APIs deprecated incluída (se aplicável)
+- [ ] Skill pausa e pede confirmação antes da Fase 3
+
+### Fase 3 — Refatoração
+- [ ] Estrutura de diretórios segue padrão MVC
+- [ ] Configuração extraída para módulo de config (sem hardcoded)
+- [ ] Models criados para abstrair dados
+- [ ] Views/Routes separadas para visualização ou roteamento
+- [ ] Controllers concentram o fluxo da aplicação
+- [ ] Error handling centralizado
+- [ ] Entry point claro
+- [ ] Aplicação inicia sem erros
+- [ ] Endpoints originais respondem corretamente
+```

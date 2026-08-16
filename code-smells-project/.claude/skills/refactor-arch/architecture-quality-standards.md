@@ -522,6 +522,32 @@ Código com estilos inconsistentes de formatação e convenções.
 
 ---
 
+## Categoria: DEPENDENCIES & COMPATIBILITY
+
+### CS-021: Deprecated API Usage
+**Severidade:** MEDIUM  
+**Tipo:** Compatibilidade  
+**Descrição:**  
+Uso de função, classe, módulo ou padrão marcado como deprecated pela documentação oficial da versão da linguagem/framework/biblioteca já instalada no projeto. Escale para HIGH se a API já foi removida em uma versão suportada próxima (quebra iminente) ou para CRITICAL se a deprecação existe por motivo de vulnerabilidade de segurança conhecida.
+
+**Padrão Detectável:**
+- Import ou chamada de algo marcado como deprecated na documentação oficial da versão exata instalada (conferir manifest de dependências — `requirements.txt`, `package.json`, `pom.xml`, etc. — nunca supor a versão)
+- `DeprecationWarning`, `console.warn` de depreciação, ou aviso equivalente emitido em runtime/build/testes e não tratado
+- API já removida em uma versão mais nova do mesmo framework/linguagem, ainda presente no código
+- Padrão que a própria documentação oficial recomenda substituir por um equivalente moderno
+
+**Impacto:**
+- Quebra em uma futura atualização de dependência, já que a API pode ser removida sem aviso adicional
+- Perde patches de segurança e correção de bugs que só se aplicam ao substituto recomendado
+- Sinaliza dependências desatualizadas, aumentando a chance de haver vulnerabilidades conhecidas não corrigidas na mesma versão
+
+**Refatoração:**
+- Substituir pelo equivalente moderno indicado na documentação oficial da versão instalada
+- Nunca classificar algo como deprecated por suposição — confirmar contra a versão real do manifest e a documentação/changelog oficial
+- Sem substituto direto disponível, isolar o uso atrás de uma abstração própria para facilitar a troca quando o substituto existir
+
+---
+
 ## Como Usar Este Catálogo
 
 1. **Ao Analisar Código:** Use este catálogo para identificar defeitos arquiteturais conhecidos

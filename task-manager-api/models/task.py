@@ -1,6 +1,5 @@
 from database import db
 from datetime import datetime
-import json
 
 class Task(db.Model):
     __tablename__ = 'tasks'

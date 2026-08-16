@@ -83,6 +83,74 @@ Os 6 problemas da análise manual foram todos confirmados pela auditoria (6/6); 
 - Nenhuma camada de service/repository entre as rotas e o ORM, apesar de `services/` e `utils/` já existirem no projeto.
 - `NotificationService` e a maior parte de `utils/helpers.py` são código morto, nunca importados fora do próprio arquivo.
 
-Esse foi o único dos 3 projetos com organização parcial em camadas já existente (`models/`, `routes/`, `services/`, `utils/`), e mesmo assim a auditoria não deixou de encontrar praticamente os mesmos tipos de problema dos outros dois — o que reforça que estrutura de pastas sozinha não garante separação de responsabilidades real.
 
-Fase 3 (execução do refactor) ainda não rodou neste projeto, então não há comparação de estrutura antes/depois nem validação de boot/endpoints pós-refatoração até o momento.
+A Fase 3 já rodou neste projeto: `services/task_service.py`, `user_service.py`, `category_service.py` e `report_service.py` foram criados para concentrar a lógica de negócio (antes direto nas rotas); `config/settings.py` passou a ler `SECRET_KEY`/`DATABASE_URL`/`DEBUG`/`HOST`/`PORT` via `python-dotenv`, com `HOST` agora `127.0.0.1` por padrão em vez de `0.0.0.0`; senhas passaram a usar `werkzeug.security` no lugar de MD5, e o campo `password` foi removido de `User.to_dict()`; `NotificationService` (código morto) foi removido. Validado via `flask.test_client()`: `/health`, `/tasks`, `/users` (sem `password`), `/login` (hash novo) e `/reports/summary` respondem 200, sem regressão de comportamento observável.
+
+**Ressalva:** o achado HIGH de autenticação ausente (token fake `'fake-jwt-token-' + id`, nenhuma rota valida) **não foi corrigido** nesta Fase 3 — `services/user_service.py` ainda emite o mesmo token não verificado, e nenhuma rota checa `Authorization`/`is_admin()`. Se isso não foi uma decisão explícita de escopo, é um follow-up pendente.
+
+**Validação manual pós-refatoração**
+
+Suba o servidor num terminal:
+
+```powershell
+cd task-manager-api
+pip install -r requirements.txt
+python seed.py
+python app.py
+```
+
+A aplicação sobe em `http://127.0.0.1:5000` (a Fase 3 trocou o host padrão de `0.0.0.0` para `127.0.0.1` — CS-010).
+
+Em outro terminal (PowerShell), rode:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:5000/health
+Invoke-RestMethod http://127.0.0.1:5000/tasks
+Invoke-RestMethod http://127.0.0.1:5000/users
+Invoke-RestMethod http://127.0.0.1:5000/reports/summary
+
+Invoke-RestMethod -Uri http://127.0.0.1:5000/login -Method Post -ContentType "application/json" -Body (@{ email = "joao@email.com"; password = "1234" } | ConvertTo-Json)
+try { Invoke-RestMethod -Uri http://127.0.0.1:5000/login -Method Post -ContentType "application/json" -Body (@{ email = "joao@email.com"; password = "errada" } | ConvertTo-Json) } catch { $_.Exception.Response.StatusCode.value__ }
+try { Invoke-RestMethod http://127.0.0.1:5000/tasks/999999 } catch { $_.Exception.Response.StatusCode.value__ }
+```
+
+Resultado esperado:
+
+```
+GET /health                -> 200, status: ok
+GET /tasks                  -> 200, lista de tasks do seed
+GET /users                   -> 200, 3 usuários, sem o campo "password"
+GET /reports/summary         -> 200
+POST /login (senha correta)   -> 200, token + dados do usuário
+POST /login (senha errada)     -> 401, {"error": "..."}
+GET /tasks/999999               -> 404, {"error": "..."}
+```
+
+Confirma na prática os achados corrigidos na Fase 3: a senha não é mais exposta pela API (`GET /users`), o login funciona contra o hash `werkzeug.security` do seed, e os erros (401 na senha errada, 404 na task inexistente) respondem de forma consistente pelo `@app.errorhandler(ServiceError)` central em `app.py`, em vez de blocos `try/except` repetidos por rota — sem regressão de comportamento nos endpoints originais.
+
+## Checklist de Validação
+
+### Fase 1 — Análise
+- [x] Linguagem detectada corretamente
+- [x] Framework detectado corretamente
+- [x] Domínio da aplicação descrito corretamente
+- [x] Número de arquivos analisados condiz com a realidade
+
+### Fase 2 — Auditoria
+- [x] Relatório segue o template definido nos arquivos de referência
+- [x] Cada finding tem arquivo e linhas exatos
+- [x] Findings ordenados por severidade (CRITICAL → LOW)
+- [x] Mínimo de 5 findings identificados
+- [x] Detecção de APIs deprecated incluída (se aplicável)
+- [x] Skill pausa e pede confirmação antes da Fase 3
+
+### Fase 3 — Refatoração
+- [x] Estrutura de diretórios segue padrão MVC
+- [x] Configuração extraída para módulo de config (sem hardcoded)
+- [x] Models criados para abstrair dados
+- [x] Views/Routes separadas para visualização ou roteamento
+- [x] Controllers concentram o fluxo da aplicação
+- [x] Error handling centralizado
+- [x] Entry point claro
+- [x] Aplicação inicia sem erros
+- [x] Endpoints originais respondem corretamente

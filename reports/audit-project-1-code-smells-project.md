@@ -3,124 +3,153 @@ ARCHITECTURE AUDIT REPORT
 ================================
 Project:  code-smells-project
 Stack:    Python 3, Flask 3.1.1, sqlite3 (raw driver), no ORM
-
-Files:    4 application source files inspected (app.py: 89 lines, controllers.py: 293 lines, database.py: 87 lines, models.py: 315 lines) | 784 total lines
+Files:    4 source files inspected (app.py, controllers.py, database.py, models.py) | 780 lines total
 
 Summary
-CRITICAL: 4 | HIGH: 4 | MEDIUM: 4 | LOW: 2
+CRITICAL: 5 | HIGH: 5 | MEDIUM: 4 | LOW: 3
 ================================
 
 ## Findings
 
-### [CRITICAL] CS-008a: SQL injection via string-concatenated queries (models.py)
-File: models.py:28, 47-50, 57-61, 68, 92, 109-111, 126-129, 140, 148-151, 155, 157-160, 163-166, 174, 188, 192, 220, 224, 279-280, 289-297
-Evidence: Every query builder in `models.py` concatenates raw request-derived values directly into SQL text instead of using parameterized queries, e.g. `login_usuario`: `"SELECT * FROM usuarios WHERE email = '" + email + "' AND senha = '" + senha + "'"` (models.py:109-111), and `buscar_produtos`: `query += " AND (nome LIKE '%" + termo + "%' ...)"` (models.py:291). `sqlite3.Cursor.execute` supports `?` placeholders (used nowhere in this file), so the vulnerable pattern is consistent across all 13 data-access functions.
-Impact: Any of these 13 functions accepts attacker-controlled strings (product name/description/category, email/senha, search term, status) with no escaping. `login_usuario` alone allows classic auth-bypass injection (e.g., `senha = "' OR '1'='1"`). Full read/write/delete access to all four tables is achievable through the public API without credentials.
-Recommendation: Replace every concatenated query with parameterized `cursor.execute(sql, (params,))` calls; this is a mechanical, behavior-preserving change per function (Python's `sqlite3` supports `?` placeholders natively, no new dependency required).
+### [CRITICAL] CS-008-1: SQL injection via string concatenation across models.py
+File: models.py:28, 47-50, 57-61, 68, 92, 109-111, 126-129, 140, 148-151, 155, 157-161, 163-166, 174, 188, 192, 220, 224, 279-280, 289-297
+Evidence: Every data-access function builds SQL by concatenating raw Python values into the query string instead of using parameter binding, e.g. `cursor.execute("SELECT * FROM produtos WHERE id = " + str(id))` (models.py:28) and `"INSERT INTO produtos (...) VALUES ('" + nome + "', ..."` (models.py:47-50). `buscar_produtos` concatenates the unescaped search term directly into a `LIKE` clause (models.py:291). This pattern is used in essentially every function in the module, including the login query (models.py:109-111).
+Impact: Any request field that reaches these functions (product id, name, description, category, order items, email, password, search term, status) can be used to alter query structure — read/modify/delete arbitrary data, or bypass authentication in `login_usuario`.
+Recommendation: Replace every string-built query with parameterized queries using `?` placeholders and pass values as a tuple to `cursor.execute(query, params)`, matching the pattern already used correctly in `database.py`'s seed inserts (`cursor.executemany(... VALUES (?, ?, ?, ?, ?)", produtos)`).
 
-### [CRITICAL] CS-008b: Unauthenticated arbitrary SQL execution endpoint
+### [CRITICAL] SEC-01: Unauthenticated arbitrary SQL execution endpoint
 File: app.py:59-78
-Evidence: `POST /admin/query` reads `dados.get("sql", "")` from the request body and passes it straight to `cursor.execute(query)` (app.py:69) with no authentication, authorization, or query allow-listing. It also commits any non-`SELECT` statement (app.py:75). `POST /admin/reset-db` (app.py:47-57) is likewise unauthenticated and unconditionally truncates all four tables.
-Impact: Any unauthenticated caller can read, modify, or destroy the entire database, including dropping/altering the schema via SQLite's DDL support — this is a full data-plane compromise, strictly worse than a single injection point.
-Recommendation: Remove `/admin/query` entirely (or gate it behind authentication + an explicit allow-list of read-only statements if it must exist for internal tooling); require authentication for `/admin/reset-db` and restrict it to non-production environments.
+Evidence: `/admin/query` accepts a raw `sql` string from the JSON body and executes it directly via `cursor.execute(query)` (app.py:69), with no authentication, authorization, or query allow-list. Both `SELECT` and mutating statements are accepted.
+Impact: Any unauthenticated caller can read, modify, or destroy all data in the database, or use it as a general SQL execution primitive against the server's SQLite connection.
+Recommendation: Remove this endpoint from the deployed application, or, if intentionally kept for internal tooling, gate it behind authentication/authorization and restrict it to a fixed set of vetted operations. This is a scope decision — flagging for explicit approval before Phase 3 removes or changes it.
 
-### [CRITICAL] CS-009: Hardcoded secret key and debug mode in source
-File: app.py:7-8
-Evidence: `app.config["SECRET_KEY"] = "minha-chave-super-secreta-123"` and `app.config["DEBUG"] = True` are literals committed to source control; `app.run(..., debug=True)` (app.py:88) confirms the Flask debugger is intended to be reachable at runtime.
-Impact: `SECRET_KEY` cannot be rotated without a code change/redeploy and is visible to anyone with repo access; with `DEBUG=True` in a reachable deployment, Flask's interactive debugger (Werkzeug) allows remote code execution if an unhandled exception surfaces a debugger PIN prompt.
-Recommendation: Load `SECRET_KEY` and `DEBUG` from environment variables (e.g., `os.getenv("SECRET_KEY")`, default `DEBUG` to `False`), and fail startup if `SECRET_KEY` is unset in a non-development environment.
+### [CRITICAL] SEC-02: Unauthenticated destructive data-wipe endpoint
+File: app.py:47-57
+Evidence: `/admin/reset-db` deletes all rows from `itens_pedido`, `pedidos`, `produtos`, and `usuarios` (app.py:51-54) with no authentication check and no confirmation step.
+Impact: Any unauthenticated caller can permanently destroy all application data in one request.
+Recommendation: Remove or place behind authentication/authorization before any production exposure. Also a scope decision requiring explicit approval, since it changes a currently reachable route's availability.
 
-### [CRITICAL] Plaintext password storage and comparison
-File: models.py:105-120 (login_usuario), 122-131 (criar_usuario); database.py:75-83 (seed data)
-Evidence: `criar_usuario` inserts `senha` verbatim into the `usuarios` table with no hashing (models.py:126-129); `login_usuario` authenticates by string-equality SQL comparison against the stored plaintext value (models.py:109-111); seed users are inserted with plaintext passwords (`"admin123"`, `"123456"`, database.py:75-79); `get_todos_usuarios`/`get_usuario_por_id` also return the raw `senha` field to API callers (models.py:83, 99).
-Impact: A database read (including via the CS-008b endpoint, or any future read-only leak) exposes every user's real password in cleartext; the `/usuarios` and `/usuarios/<id>` endpoints already return `senha` in the JSON response body today.
-Recommendation: Hash passwords on write with a modern KDF (e.g., `werkzeug.security.generate_password_hash`, already available transitively via Flask) and verify with `check_password_hash` on login; stop selecting/returning the `senha` column in list/detail responses.
+### [CRITICAL] CS-009: Hardcoded secret key in source
+File: app.py:7
+Evidence: `app.config["SECRET_KEY"] = "minha-chave-super-secreta-123"` is a literal committed to source control.
+Impact: Anyone with repository access has the production signing key; it cannot be rotated without a code change and redeploy, and it is also returned verbatim in an API response (see HIGH finding below).
+Recommendation: Load `SECRET_KEY` from an environment variable (`os.getenv("SECRET_KEY")`) with no committed production value, consistent with the "Environment-based Configuration" pattern.
 
-### [HIGH] CS-002: God Module — models.py spans four unrelated domains
-File: models.py:1-315
-Evidence: A single 315-line module contains persistence and rules for products (models.py:4-70), users/authentication (72-131), orders/inventory (133-201), aggregate reporting (203-273), order status transitions (275-283), and product search (285-314) — six distinct responsibilities in one file with no internal boundaries.
-Impact: Any change to one domain (e.g., order logic) requires touching a file shared by unrelated domains, increasing merge conflicts and the blast radius of regressions; the module cannot be tested or reasoned about per-domain.
-Recommendation: Split into domain-scoped modules (e.g., `produtos_repository.py`, `usuarios_repository.py`, `pedidos_repository.py`, `relatorios.py`) that each own their own queries, keeping the public function names/signatures stable so `controllers.py` call sites do not change.
+### [CRITICAL] SEC-03: Passwords stored and compared in plaintext
+File: database.py:75-79, models.py:105-120, models.py:122-131
+Evidence: Seed users are inserted with plaintext passwords (database.py:76-79, e.g. `("Admin", "admin@loja.com", "admin123", "admin")`). `criar_usuario` stores whatever password string is supplied without hashing (models.py:122-131). `login_usuario` authenticates by matching the plaintext password directly inside the SQL `WHERE` clause (models.py:109-111), and `get_todos_usuarios`/`get_usuario_por_id` return the stored `senha` field verbatim in API responses (models.py:79-87, 95-103).
+Impact: A database read (including via the SQL-injection and admin-query findings above) exposes every user's real password; there is no cryptographic protection of credentials at rest or in transit through the API.
+Recommendation: Hash passwords at creation time with a standard KDF (e.g. Werkzeug's `generate_password_hash`/`check_password_hash`, already available transitively via Flask) and compare hashes in `login_usuario` instead of embedding the password in SQL. Note: existing seeded/plaintext rows would need a migration strategy — flagging for approval since this changes stored data format, not just code.
 
-### [HIGH] CS-013: Global mutable connection singleton
-File: database.py:4, 7-11
-Evidence: `db_connection = None` is a module-level global; `get_db()` lazily assigns to it via `global db_connection` and returns the same `sqlite3.Connection` to every caller across the process, opened with `check_same_thread=False` (database.py:10) specifically to allow cross-thread sharing of one connection/cursor state.
-Impact: Flask's dev server and most WSGI servers handle requests on multiple threads; sharing one `sqlite3.Connection` (and implicitly its transaction state) across concurrent requests risks interleaved commits and inconsistent reads, and makes the module impossible to unit-test without mutating global state or monkeypatching.
-Recommendation: Create a request-scoped connection using Flask's `g` object (`flask.g` + `teardown_appcontext`) or a connection-per-call pattern, still targeting the same `loja.db` file, so each request gets an isolated connection without global mutable state.
+## Findings (continued)
 
-### [HIGH] CS-003: No abstraction between HTTP, domain, and persistence layers
-File: app.py:4, 49, 66; controllers.py:3; models.py:1
-Evidence: `app.py`, `controllers.py`, and `models.py` all import `database.get_db` directly and call it independently (app.py:49 and app.py:66 for the two admin routes, controllers.py's `health_check` at controllers.py:266, and every function in `models.py`); there is no repository interface or service layer that `controllers.py` depends on — it calls `models.*` functions that themselves reach into the global connection.
-Impact: Every layer is hard-wired to the concrete SQLite connection; swapping storage, mocking persistence for a controller test, or adding a caching layer would require touching call sites in three files instead of one seam.
-Recommendation: Once models.py is split (per CS-002), route all data access exclusively through the new per-domain modules and remove the direct `database.get_db` import from `app.py` and `controllers.py`, keeping `database.py` as the only module that constructs connections.
+### [HIGH] CS-002: God module — models.py concentrates every domain
+File: models.py:1-314
+Evidence: A single flat module with no classes handles products, users, authentication, orders, stock adjustment, order-item aggregation, and sales reporting (e.g. discount-tier business logic at models.py:256-262 sits next to raw SQL execution).
+Impact: The module has many independent reasons to change, cannot be tested per domain in isolation, and any change to one domain (e.g. orders) risks touching code shared with unrelated domains (e.g. products) since everything lives in one namespace.
+Recommendation: Split into per-domain modules (e.g. products, users, orders, reports) that each own their own queries, keeping function signatures stable so `controllers.py` call sites do not need to change behavior.
 
-### [HIGH] CS-016: No automated test coverage
-File: n/a (absence confirmed — no `tests/` directory, no `test_*.py`, no `pytest`/`unittest` in requirements.txt or imports)
-Evidence: `requirements.txt` lists only `flask` and `flask-cors`; no test framework or test files exist in the project.
-Impact: Every refactor in this project, including the plan below, currently has no automated regression safety net; correctness after any change can only be verified by manual boot and endpoint checks.
-Recommendation: Out of scope to add a full suite in this pass (would expand scope beyond the approved architecture fixes), but Phase 3 validation will rely on manual boot + `curl` smoke tests per endpoint, listed in the Validation plan below. Recommend a follow-up task to add `pytest` + a minimal test module per domain once the split lands.
+### [HIGH] CS-013: Global mutable connection state
+File: database.py:4, 7-10
+Evidence: `db_connection` is a module-level global, lazily assigned inside `get_db()` with a `global` statement (database.py:4, 8-10). All request handling across the app implicitly shares this single mutable global.
+Impact: No dependency injection point exists for tests or alternate environments; the connection lifecycle is implicit and coupled to import order and first-call timing rather than being managed explicitly by the application.
+Recommendation: Move connection creation into an explicit factory/initializer called once from the application entry point, and pass the connection (or a request-scoped accessor) into the modules that need it instead of relying on a module global.
+
+### [HIGH] CS-010: Secret key and debug flag exposed in health check response
+File: controllers.py:264-292
+Evidence: `health_check` returns `"debug": True` and `"secret_key": "minha-chave-super-secreta-123"` directly in the JSON body (controllers.py:288-289), on an endpoint reachable without authentication.
+Impact: Combined with the CRITICAL hardcoded-secret finding above, this makes the secret actively retrievable over the network by any caller, not merely present in source.
+Recommendation: Remove `secret_key` and `debug` from the health-check payload entirely; a health check should report service/dependency status, not configuration values.
+
+### [HIGH] ARCH-01: Domain/business rules embedded directly in HTTP controllers
+File: controllers.py:52, 208-210, 242, 247-250
+Evidence: The list of valid product categories is a literal inside `criar_produto` (controllers.py:52); the list of valid order statuses is a literal inside `atualizar_status_pedido` (controllers.py:242); and notification side effects ("ENVIANDO EMAIL/SMS/PUSH" at controllers.py:208-210, and status-specific notification rules at controllers.py:247-250) are triggered directly from the HTTP handler.
+Impact: Domain rules that should be independent of the transport layer are only reachable by editing route-handler functions, and cannot be reused or unit-tested without a Flask request context.
+Recommendation: Move category/status enumerations into shared domain constants, and move notification triggering into the order-processing logic in the data/business layer (or a dedicated notification hook called from there), so `controllers.py` only translates HTTP <-> domain calls.
+
+### [HIGH] CS-010-2: Internal exception details leaked verbatim in API error responses
+File: controllers.py:10-12, 21-22, 60-62, 77-78, 95-96, 108-109, 125-126, 133-134, 143-144, 164-165, 185-186, 218-220, 226-227, 234-235, 254-255, 261-262, 291-292
+Evidence: Every controller function follows `except Exception as e: return jsonify({"erro": str(e)}), 500`, returning the raw Python exception message to the HTTP client for every unanticipated failure.
+Impact: Internal implementation details (e.g. raw SQLite error text, which can itself reveal query structure given the SQL-injection findings above) are exposed to any API caller, aiding further attacks and leaking operational details.
+Recommendation: Log the full exception server-side and return a generic error message and code to the client; reserve detailed messages for server logs only.
+
+## Findings (continued)
 
 ### [MEDIUM] CS-011: N+1 queries when assembling order responses
-File: models.py:171-201 (get_pedidos_usuario), 203-233 (get_todos_pedidos)
-Evidence: Both functions run one query for orders, then for each order row run a second query for its items (models.py:188, 220), and for each item row run a third query to resolve the product name (models.py:192, 224) — three nested cursors (`cursor`, `cursor2`, `cursor3`) per call, O(orders × items) round trips total.
-Impact: Response time for `GET /pedidos` and `GET /pedidos/usuario/<id>` degrades linearly with order/item volume instead of running as a constant small number of queries.
-Recommendation: Replace the nested-cursor loop with a single `JOIN` across `pedidos`, `itens_pedido`, and `produtos` (or two queries: one for orders, one batched `WHERE pedido_id IN (...)` for items+product names), grouping results in Python.
+File: models.py:171-201, 203-233
+Evidence: `get_pedidos_usuario` and `get_todos_pedidos` each run one query for orders, then for every order run a second query for its items (models.py:188, 220), then for every item a third query to look up the product name (models.py:192, 224) — nested `cursor2`/`cursor3` queries inside loops.
+Impact: Response time grows linearly with the number of orders and items rather than being a small constant number of queries; this degrades quickly as data grows.
+Recommendation: Replace the nested-loop queries with a single join (orders + items + products) or a batched `IN (...)` query per level, and assemble the nested response structure in Python from the joined result set.
 
-### [MEDIUM] CS-001: Duplicated row-mapping and validation logic
-File: models.py:9-21, 31-40, 304-313; controllers.py:26-54, 66-90
-Evidence: The product-row-to-dict mapping (`id`, `nome`, `descricao`, `preco`, `estoque`, `categoria`, `ativo`, `criado_em`) is written out identically three times in `get_todos_produtos`, `get_produto_por_id`, and `buscar_produtos`. Separately, `criar_produto` and `atualizar_produto` in `controllers.py` repeat the same five `if` checks for missing `nome`/`preco`/`estoque` and the same negative-value checks (controllers.py:30-46 vs. 74-90).
-Impact: A field added to the product schema, or a validation rule change, must be edited in three (or two) places; the previous manual analysis in README.md already flagged the validation duplication independently, corroborating this finding.
-Recommendation: Extract a single `_row_to_produto(row)` mapping helper in the products module, and a single `_validar_produto(dados)` validation helper shared by create/update in the controller (or a lightweight validation layer), called from both call sites.
+### [MEDIUM] CS-001: Duplicated validation logic between create and update product
+File: controllers.py:24-62, 64-96
+Evidence: `criar_produto` and `atualizar_produto` repeat the same field-presence checks (`nome`, `preco`, `estoque`) and the same negative-value checks for `preco`/`estoque` (controllers.py:30-35, 43-46 vs. 74-79, 87-90) with no shared helper.
+Impact: The two validation blocks can drift apart over time (e.g. `atualizar_produto` does not re-validate the category or name length that `criar_produto` checks), producing inconsistent rules for effectively the same data shape.
+Recommendation: Extract a single validation function used by both handlers, so the rule set is defined once.
 
-### [MEDIUM] Internal error details leak to API callers via broad exception handling
-File: controllers.py:10-12, 21-22, 60-62, 95-96, 108-109, 125-126, 133-134, 143-144, 164-165, 185-186, 218-220, 226-227, 234-235, 254-255, 261-262
-Evidence: Every controller function wraps its body in `try/except Exception as e: return jsonify({"erro": str(e)}), 500`, returning the raw Python exception message to the HTTP client in all 15 endpoints; several also `print()` the same detail to stdout (e.g., controllers.py:11, 61, 219).
-Impact: Exception text can surface internal implementation details (query fragments, file paths, type names) to any caller, and stdout logging with no structure/level makes production log triage harder.
-Recommendation: Keep the broad catch as a last-resort safety net, but log the full exception server-side (e.g., `app.logger.exception(...)`) and return a generic client-facing message; reserve detailed messages for the specific, already-handled validation branches.
+### [MEDIUM] CS-015: Inconsistent error-signaling strategy across the data layer
+File: models.py:41, 103, 142-145; controllers.py:16-20, 139-142, 205-206
+Evidence: Not-found lookups return `None` (models.py:41, 103); stock/product validation failures inside `criar_pedido` return a plain dict with an `"erro"` key (models.py:142-145), which `controllers.py` then has to specifically check for with `if "erro" in resultado` (controllers.py:205-206); all other failures propagate as raised exceptions caught generically in the controller's `except Exception`.
+Impact: Three different conventions for signaling failure from the same layer make the contract between `models.py` and `controllers.py` inconsistent and easy to get wrong when adding a new function.
+Recommendation: Pick one consistent strategy (e.g. raise typed exceptions for all failure cases, including stock/not-found, and let controllers translate exception types to HTTP status codes).
 
-### [MEDIUM] CS-019: No type hints or input schemas across the HTTP/domain boundary
-File: controllers.py (all function signatures), models.py (all function signatures)
-Evidence: No function in `controllers.py` or `models.py` declares parameter or return types; request bodies are read via untyped `dados.get(...)` calls with manual `if key not in dados` checks instead of a schema (e.g., controllers.py:24-54).
-Impact: There is no machine-checkable contract for what a controller passes to a model function or what shape it returns; this matches the previous manual analysis in README.md ("contratos entre camadas são implícitos") and increases the risk of silent breakage during the split proposed in CS-002.
-Recommendation: Add type hints to the new per-domain module functions as they are created in Phase 3 (e.g., `def criar_produto(nome: str, descricao: str, preco: float, estoque: int, categoria: str) -> int`); introducing a full validation library (Pydantic/Marshmallow) is a larger change and should be a follow-up, not part of this pass.
+### [MEDIUM] CS-019: No type hints anywhere in the codebase
+File: app.py, controllers.py, models.py, database.py (all functions)
+Evidence: None of the functions across the four modules declare parameter or return type annotations (e.g. `def criar_produto(nome, descricao, preco, estoque, categoria):` at models.py:43).
+Impact: Editors/type checkers cannot catch type-related mistakes (e.g. passing a string where a number is expected in price/stock fields), and the expected shape of data crossing the controller/model boundary is only discoverable by reading implementation code.
+Recommendation: Add type hints incrementally, starting with the controller/model boundary functions, and optionally introduce `mypy` for static checking.
 
-### [LOW] CS-007: Magic strings for domain enumerations
+## Findings (continued)
+
+### [LOW] CS-007: Domain enumerations hardcoded as literals in controllers
 File: controllers.py:52, 242
-Evidence: The valid product categories list (`["informatica", "moveis", "vestuario", "geral", "eletronicos", "livros"]`, controllers.py:52) and the valid order status list (`["pendente", "aprovado", "enviado", "entregue", "cancelado"]`, controllers.py:242) are inline literals inside HTTP handler functions.
-Impact: The domain vocabulary for categories/status is defined only where a specific route happens to need it; a second route needing the same list (there is none today, but `atualizar_status_pedido`'s check is the only place the status enum exists) risks drifting out of sync if duplicated later.
-Recommendation: Move both lists to module-level constants (e.g., `CATEGORIAS_VALIDAS`, `STATUS_VALIDOS`) in the module that owns each domain, imported by the controller.
+Evidence: `categorias_validas = ["informatica", "moveis", "vestuario", "geral", "eletronicos", "livros"]` (controllers.py:52) and the inline status list `["pendente", "aprovado", "enviado", "entregue", "cancelado"]` (controllers.py:242) are literals local to their functions.
+Impact: These domain-level enumerations must be found and edited inside HTTP handler code, and cannot be reused by other code paths that might need the same valid-value set.
+Recommendation: Extract to named constants (or enums) in a shared module.
 
-### [LOW] CS-020: Inconsistent string formatting (concatenation vs. f-strings)
-File: controllers.py:8, 11, 54, 57, 61, 106, 161, 179, 182, 208-210, 219, 248, 250; models.py:47-50, 57-61, 68, 92, 109-111, 126-129, 140-166, 174, 188, 192, 220, 224, 279-280, 291-297
-Evidence: All string building in both files uses `"..." + str(x) + "..."` concatenation rather than Python f-strings, even in the same statements that will be rewritten for CS-008a's parameterization.
-Impact: Purely a readability/consistency issue; no functional risk on its own, but worth fixing opportunistically while touching the same lines for the SQL-injection fix.
-Recommendation: When rewriting query strings and log/print messages for CS-008a, switch to f-strings at the same time (e.g., `f"Produto criado com ID: {id}"`).
+### [LOW] CS-020: Inconsistent route-registration style within the same app
+File: app.py:11-30 vs. app.py:32-78
+Evidence: Most routes are registered via `app.add_url_rule(...)` bound to functions imported from `controllers` (app.py:11-30), while three routes (`/`, `/admin/reset-db`, `/admin/query`) are declared inline on `app` using the `@app.route` decorator with their logic written directly in `app.py` (app.py:32-78).
+Impact: Route-handling responsibility is split between two different files and two different registration idioms for no evident reason, making it harder to find where a given route's logic lives.
+Recommendation: Standardize on one registration style and move all route-handler logic into `controllers.py` (or an equivalent handlers module) for consistency.
+
+### [LOW] CS-018-1: Logging via print() instead of a logging framework
+File: app.py:56, 83-86; controllers.py:8, 11, 57, 61, 106, 161, 179, 182, 208-210, 248, 250
+Evidence: Operational and diagnostic messages are written with bare `print()` calls (e.g. `print("Produto criado com ID: " + str(id))` at controllers.py:57), rather than a configured logger.
+Impact: No log levels, no structured output, and no way to control verbosity or route logs to a collection system without editing source code.
+Recommendation: Replace `print()` calls with Python's `logging` module, configured once at the entry point.
+
+## Verificação adicional (CS-021 — APIs deprecated)
+
+Checagem retroativa executada após a adição do critério CS-021 ao catálogo da skill (não fazia parte da auditoria original acima).
+
+Escopo verificado: código então auditado (app.py, controllers.py, models.py, database.py monolíticos) e o código atual pós-Fase 3 (app.py, config.py, database.py, routes.py, controllers.py, models/produtos.py, models/usuarios.py, models/pedidos.py, utils/constants.py, utils/validation.py), contra as versões fixadas em requirements.txt: `flask==3.1.1`, `flask-cors==5.0.1` (Werkzeug é dependência transitiva do Flask; nenhuma versão própria é pinada).
+
+Evidence: As únicas APIs de terceiros usadas em todo o projeto são `flask.Flask`, `flask.jsonify`, `flask.request`, `Flask.add_url_rule`, `Flask.run`, `flask_cors.CORS`, `werkzeug.security.generate_password_hash`/`check_password_hash`, e a biblioteca padrão `sqlite3`/`logging`. Nenhuma delas consta como deprecated na documentação oficial do Flask 3.1.x, Werkzeug 3.x ou Flask-Cors 5.x, e nenhum `DeprecationWarning` é emitido ao iniciar a aplicação (`python app.py`) ou ao exercitar os endpoints.
+Impact: Nenhum. Verificação de rotina que não abre nova ação — registrada aqui apenas para fechar o item correspondente do checklist de validação.
+Recommendation: Nenhuma ação necessária no momento. Reexecutar esta checagem quando as versões em requirements.txt forem atualizadas.
+
+Nota de ambiente: o ambiente Python local instalado difere do manifest (`pip show` retorna Flask 3.0.0 / Werkzeug 3.1.8 / Flask-Cors 4.0.0, enquanto requirements.txt fixa Flask 3.1.1 / Flask-Cors 5.0.1). Isso não muda o resultado da checagem — nenhuma das APIs usadas é deprecated em nenhum dos dois conjuntos de versões — mas o ambiente local deveria ser sincronizado com `pip install -r requirements.txt` antes da próxima execução para evitar essa divergência.
 
 ## Approved-scope proposal
 
-1. **Security fixes (CS-008a, CS-008b, CS-009, plaintext passwords):** parameterize every SQL statement in `models.py`; remove or lock down `/admin/query` and `/admin/reset-db`; move `SECRET_KEY`/`DEBUG` to environment variables; hash passwords with `werkzeug.security` and stop returning `senha` in responses.
-2. **Structural split (CS-002, CS-003):** split `models.py` into `produtos_repository.py`, `usuarios_repository.py`, `pedidos_repository.py`, and `relatorios.py`, each importing `database.get_db` directly (removing that import from `app.py`/`controllers.py` where unused after the split); keep all public function names/signatures unchanged so `controllers.py` needs only import-path updates.
-3. **Connection lifecycle (CS-013):** replace the global `db_connection` singleton with a Flask `g`-scoped connection opened per request and closed via `teardown_appcontext`, keeping the same `loja.db` file and schema/seed bootstrap behavior on first run.
-4. **N+1 fix (CS-011):** rewrite `get_pedidos_usuario`/`get_todos_pedidos` to use a joined or batched query instead of nested per-row cursors.
-5. **De-duplication (CS-001):** extract the shared product row-mapping helper and the shared product validation helper.
-6. **Error handling (broad-exception finding):** log full exceptions server-side, return generic client-facing error messages from the broad `except` blocks.
-7. **Low-severity cleanup (CS-007, CS-020, CS-019 for new modules):** extract category/status constants; add type hints to the newly created domain modules; convert touched string-building to f-strings.
+1. Parameterize every SQL statement in models.py to eliminate SQL injection (CS-008-1), preserving existing function signatures and return shapes.
+2. Move `SECRET_KEY` and the SQLite path to environment variables with local-dev defaults (CS-009), and remove `secret_key`/`debug` from the `/health` response body (CS-010).
+3. Address the two unauthenticated admin endpoints (SEC-01, SEC-02) — needs your decision: remove them entirely, or keep them gated behind authentication. No code change will be made here until you choose.
+4. Address plaintext password storage (SEC-03) — needs your decision on migration handling for the existing seeded users, since hashing changes the stored data format, not just the code.
+5. Split models.py into per-domain modules (products, users, orders, reports) without changing function signatures used by controllers.py (CS-002).
+6. Replace nested-loop order/item/product lookups with joined queries (CS-011).
+7. Extract shared product validation used by create and update (CS-001), and extract category/status enumerations into shared constants (CS-007).
+8. Standardize all routes to go through controllers.py (CS-020), replace print() with logging (CS-018-1), and add type hints to controller/model function signatures (CS-019) as incremental, behavior-preserving cleanups.
 
-Out of scope for this pass: adding a test framework/suite (CS-016) and a full request-validation library (extended CS-019) — both flagged as follow-up work, not required to fix the audited findings safely.
+Item 9 (CS-015 inconsistent error-signaling, CS-010-2 exception detail leakage, ARCH-01 notification/enum relocation) will be folded into the same pass as items 5–8 since they touch the same functions.
 
 ## Validation plan
 
-- No automated test suite exists (CS-016), so validation is manual:
-- `python app.py` boots without errors and logs the startup banner (confirms schema/seed bootstrap still runs).
-- `GET /health` returns `200` with accurate counts and, after the CS-009/CS-010 fix, no longer includes `secret_key`/`debug` in the body.
-- `GET /produtos`, `GET /produtos/<id>`, `GET /produtos/busca?q=...` return the same shape/data as before the split.
-- `POST /produtos`, `PUT /produtos/<id>`, `DELETE /produtos/<id>` succeed with valid payloads and still reject invalid ones with the same 400 messages.
-- `POST /usuarios` creates a user; `GET /usuarios`/`GET /usuarios/<id>` no longer expose `senha` in the response body.
-- `POST /login` succeeds with the seeded admin credentials and fails with wrong credentials (confirms hashing didn't break auth); attempt a SQL-injection payload in `email`/`senha` and confirm it now fails cleanly instead of bypassing auth.
-- `POST /pedidos`, `GET /pedidos`, `GET /pedidos/usuario/<id>`, `PUT /pedidos/<id>/status` return unchanged data shapes; verify order/item counts match pre-refactor manual runs.
-- `GET /relatorios/vendas` returns the same aggregate numbers as before the change.
-- `POST /admin/query` and `POST /admin/reset-db` reachability/behavior matches whatever the approved plan decides (removed, or now rejecting unauthenticated calls).
-- No linter/formatter/build tooling is configured in this project (no `setup.cfg`, `pyproject.toml`, `.flake8`, or CI config found), so no static-check command will be run beyond `python -c "import app"`-style import sanity checks during Phase 3.
+- No automated test suite exists in this project (confirmed absent in Phase 1). Validation will rely on:
+  - `python app.py` boot check — server starts without error and creates/reuses `loja.db`.
+  - Manual smoke checks against each route group (produtos, usuarios, pedidos, relatórios, login, health) using representative requests, comparing response shape/status codes before and after each change.
+  - Re-running the same smoke checks after the SQL parameterization change specifically, including a request containing a quote character in a text field, to confirm the injection is closed without breaking normal input.
 
-Approval required: Do you approve this plan for Phase 3?
+Approval required: Do you approve this plan for Phase 3? Please also tell me your preference on items 3 (admin endpoints) and 4 (password hashing/migration), since those involve behavior/data decisions beyond a pure refactor.
 ================================
