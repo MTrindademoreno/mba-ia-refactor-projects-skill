@@ -78,7 +78,7 @@ Os 5 problemas da análise manual foram todos confirmados pela auditoria (5/5). 
 - `SECRET_KEY` e modo debug hardcoded no código-fonte.
 - Senhas armazenadas e comparadas em texto puro no login e na criação de usuário.
 
-A Fase 3 já rodou neste projeto (relatório completo em [`reports/code-smells-project-phase3-refactoring.md`](reports/code-smells-project-phase3-refactoring.md)): `models.py` foi separado em `models/produtos.py`, `models/usuarios.py` e `models/pedidos.py`; `SECRET_KEY`/`DEBUG`/`DATABASE_PATH` passaram a vir de variável de ambiente via `config.py`; senhas agora são hasheadas com `werkzeug.security`; `/admin/reset-db` e `/admin/query` foram removidos; e todas as queries passaram a usar parâmetros vinculados.
+A Fase 3 já rodou neste projeto: `models.py` foi separado em `models/produtos.py`, `models/usuarios.py` e `models/pedidos.py`; `SECRET_KEY`/`DEBUG`/`DATABASE_PATH` passaram a vir de variável de ambiente via `config.py`; senhas agora são hasheadas com `werkzeug.security`; `/admin/reset-db` e `/admin/query` foram removidos; e todas as queries passaram a usar parâmetros vinculados.
 
 **Validação manual pós-refatoração**
 
